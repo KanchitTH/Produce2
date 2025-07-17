@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ProductionFlow</title>
+
+    <!-- เพิ่มการเชื่อมโยงกับ manifest.json -->
+    <link rel="manifest" href="/manifest.json">
+
+    <!-- การโหลดฟอนต์จาก Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Kanit&display=swap" rel="stylesheet">
+
+    <style>
+      #userEmail {
+        color: #555;
+      }
+      * {
+        font-family: 'Kanit', sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #f2f9f1;
+        padding: 20px;
+      }
+      .container {
+        max-width: 1000px;
+        margin: auto;
+        background: #fff;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      }
+      h2, h3 {
+        color: #34a853;
+      }
+      select, input, button {
+        font-family: 'Kanit', sans-serif;
+        padding: 8px;
+        margin: 5px 0;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+      }
+      th, td {
+        padding: 8px;
+        border: 1px solid #ccc;
+        text-align: left;
+      }
+      #bomTable th {
+        background-color: #e0f7e9;
+      }
+      #stockTable th {
+        background-color: #f0f0f0;
+      }
+      .spinner {
+        display: none;
+        margin: 10px auto;
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #34a853;
+        border-radius: 50%;
+        width: 36px;
+        height: 36px;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    </style>
+
+    <!-- ลงทะเบียน Service Worker -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/service-worker.js').then(function(registration) {
+          console.log('Service Worker registered with scope:', registration.scope);
+        }).catch(function(error) {
+          console.log('Service Worker registration failed:', error);
+        });
+      }
+    </script>
+  </head>
+
+  <body>
+    <div class="container">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+        <h2 style="margin: 0;">ระบบ ProductionFlow</h2>
+        <div style="font-weight: bold;">👤 ผู้ใช้: <span id="userEmail">Loading...</span></div>
+      </div>
+
+      <label>เลือกสินค้าผลิต:</label>
+      <select id="productSelect" onchange="onProductSelect()"></select>
+
+      <br>
+      <label>จำนวนที่ต้องการผลิต (kg):</label>
+      <input type="number" id="qtyInput" value="1" min="0" step="1" oninput="updateBOMQty()">
+
+      <table id="bomTable"></table>
+
+      <br>
+      <button id="saveBtn" onclick="saveRequest()">💾 บันทึกใบเบิก</button>
+      <button onclick="clearForm()">🧹 ล้างข้อมูล</button>
+
+      <div id="saveSpinner" class="spinner"></div>
+
+      <br><br>
+      <label>เลือกเลขที่ใบเบิก:</label>
+      <select id="requestIdSelect">
+        <option value="">-- เลือกใบเบิก --</option>
+      </select>
+      <button onclick="exportPDF()">📄 โหลดใบเบิกเป็น PDF</button>
+      <div id="spinner" class="spinner"></div>
+
+      <hr>
+      <h3>🔍 เช็คสินค้าในคลัง</h3>
+      <input type="text" id="searchInput" placeholder="พิมพ์ชื่อสินค้า..." oninput="filterStock()">
+      <table id="stockTable">
+        <thead>
+          <tr><th>รหัสสินค้า</th><th>ชื่อสินค้า</th><th>คงเหลือ</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- สคริปต์ที่เชื่อมต่อกับ Google Apps Script -->
+    <script>
+      let currentBOM = [];
+      let currentUserEmail = "";
+
+      function fetchInitial() {
+        google.script.run.withSuccessHandler(renderProductDropdown).getProductFromBOM();
+        google.script.run.withSuccessHandler(renderStockTable).getProductList();
+        google.script.run.withSuccessHandler(email => {
+          currentUserEmail = email;
+          const emailSpan = document.getElementById("userEmail");
+          if (emailSpan) emailSpan.innerText = email;
+        }).getCurrentUserEmail();
+      }
+
+      window.onload = () => {
+        fetchInitial();
+        google.script.run.withSuccessHandler(renderRequestDropdown).getRequestIds();
+      };
+
+      function renderProductDropdown(products) {
+        const select = document.getElementById("productSelect");
+        select.innerHTML = '<option value="">-- เลือกสินค้า --</option>';
+        products.forEach(name => {
+          const option = document.createElement("option");
+          option.value = name;
+          option.textContent = name;
+          select.appendChild(option);
+        });
+      }
+
+      function onProductSelect() {
+        const product = document.getElementById("productSelect").value;
+        if (!product) return;
+        google.script.run.withSuccessHandler(renderBOM).getBOM(product);
+      }
+
+      function renderBOM(data) {
+        currentBOM = data;
+        updateBOMQty();
+      }
+
+      function updateBOMQty() {
+        const qty = parseFloat(document.getElementById("qtyInput").value) || 1;
+        const table = document.getElementById("bomTable");
+        table.innerHTML = "<tr><th>วัตถุดิบ</th><th>RM</th><th>จำนวน (แก้ไขได้)</th></tr>";
+
+        currentBOM.forEach((row, i) => {
+          const baseQty = parseFloat(row[2]) || 0;
+          const calcQty = (baseQty * qty).toFixed(3);
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${row[0]}</td>
+            <td>${row[1]}</td>
+            <td><input type="number" value="${calcQty}" min="0" step="0.001" data-index="${i}" onchange="onQtyChange(event)"></td>
+          `;
+          table.appendChild(tr);
+        });
+      }
+
+      function onQtyChange(e) {
+        const index = e.target.dataset.index;
+        currentBOM[index][2] = parseFloat(e.target.value);
+      }
+
+      function saveRequest() {
+        const productName = document.getElementById("productSelect").value;
+        const qty = parseFloat(document.getElementById("qtyInput").value);
+        if (!productName || !qty || qty <= 0) {
+          alert("กรุณาเลือกสินค้าและกรอกจำนวนผลิตให้ถูกต้อง");
+          return;
+        }
+
+        document.getElementById("saveSpinner").style.display = "block";
+        document.getElementById("saveBtn").disabled = true;
+
+        const items = [];
+        const rows = document.querySelectorAll("#bomTable tr");
+        rows.forEach((row, index) => {
+          if (index === 0) return;
+          const cells = row.querySelectorAll("td");
+          if (cells.length >= 3) {
+            const rm = cells[1].innerText.trim();
+            const qty = parseFloat(cells[2].querySelector("input").value);
+            if (rm && !isNaN(qty)) {
+              items.push({ name: rm, qty });
+            }
+          }
+        });
+
+        const payload = {
+          date: new Date().toISOString().split("T")[0],
+          productName,
+          qty,
+          items,
+          requesterEmail: currentUserEmail
+        };
+
+        google.script.run
+          .withSuccessHandler(requestId => {
+            alert("บันทึกเรียบร้อยแล้ว! หมายเลขใบเบิก: " + requestId);
+            document.getElementById("saveSpinner").style.display = "none";
+            document.getElementById("saveBtn").disabled = false;
+            google.script.run.withSuccessHandler(renderRequestDropdown).getRequestIds();
+          })
+          .withFailureHandler(err => {
+            alert("เกิดข้อผิดพลาด: " + err.message);
+            document.getElementById("saveSpinner").style.display = "none";
+            document.getElementById("saveBtn").disabled = false;
+          })
+          .saveRequest(payload);
+      }
+
+      function renderRequestDropdown(ids) {
+        const select = document.getElementById("requestIdSelect");
+        select.innerHTML = '<option value="">-- เลือกใบเบิก --</option>';
+        ids.forEach(id => {
+          const option = document.createElement("option");
+          option.value = id;
+          option.textContent = id;
+          select.appendChild(option);
+        });
+      }
+
+      function exportPDF() {
+        const id = document.getElementById("requestIdSelect").value;
+        if (!id) {
+          alert("กรุณาเลือกใบเบิกก่อนโหลด PDF");
+          return;
+        }
+
+        const spinner = document.getElementById("spinner");
+        spinner.style.display = "block";
+
+        google.script.run
+          .withSuccessHandler(data => {
+            spinner.style.display = "none";
+            if (!data || data.length < 50) {
+              alert("เกิดข้อผิดพลาด: ไม่สามารถสร้าง PDF ได้");
+              return;
+            }
+            const link = document.createElement('a');
+            link.href = "data:application/pdf;base64," + data;
+            link.download = `ProductionRequest_${id}.pdf`;
+            link.click();
+          })
+          .withFailureHandler(err => {
+            spinner.style.display = "none";
+            alert("ไม่สามารถโหลด PDF ได้: " + err.message);
+          })
+          .generatePDF(id);
+      }
+
+      function renderStockTable(data) {
+        const tbody = document.querySelector("#stockTable tbody");
+        tbody.innerHTML = "";
+        data.slice(1).forEach(row => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td>${row[0]}</td><td>${row[1]}</td><td>${row[2]}</td>`;
+          tbody.appendChild(tr);
+        });
+      }
+
+      function filterStock() {
+        const input = document.getElementById("searchInput").value.toLowerCase();
+        const rows = document.querySelectorAll("#stockTable tbody tr");
+        rows.forEach(row => {
+          row.style.display = row.innerText.toLowerCase().includes(input) ? "" : "none";
+        });
+      }
+
+      function clearForm() {
+        document.getElementById("productSelect").value = "";
+        document.getElementById("qtyInput").value = 1;
+        document.getElementById("bomTable").innerHTML = "";
+        document.getElementById("requestIdSelect").value = "";
+      }
+    </script>
+  </body>
+</html>
