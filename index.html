@@ -132,13 +132,14 @@
       let currentUserEmail = "";
 
       function fetchInitial() {
-        google.script.run.withSuccessHandler(renderProductDropdown).getProductFromBOM();
-        google.script.run.withSuccessHandler(renderStockTable).getProductList();
-        google.script.run.withSuccessHandler(email => {
-          currentUserEmail = email;
-          const emailSpan = document.getElementById("userEmail");
-          if (emailSpan) emailSpan.innerText = email;
-        }).getCurrentUserEmail();
+        // ดึงข้อมูลจาก Google Apps Script Web App
+        fetch("https://script.googleusercontent.com/macros/echo?user_content_key=AehSKLgXD7dSwONR1JRqdDkHqELjqmbL01TPPwMnVt854Md2vbkT0SXR97YTd8Bzobse_wnuGDvwkBghmCLOc9Q9ass6DGdwA91gORfI4yexL5RKRxrHmY3EAmFGyXvoJMQA_rzV_W1AsaJ0C8-NlELKfgEJnds_psuypXNc-9DiYBVjLfVzN9TthPGJ-MJqtpDoarnmDQbi4zl6I7ESS9SlfmysyIA9AO-D1wTqJLVaU2YggAKQPl98Aa21oOxnWPgCiWa1BpeRZQkIlZTtQbk2v7GHbVCTDi2uaSdcsHAt&lib=Ms312KQZrTfKGLXK0hJbQf5PAOmt3wVip")
+          .then(response => response.json())
+          .then(data => {
+            console.log(data);  // ดูข้อมูลที่ได้รับจาก Google Apps Script
+            document.getElementById('responseContainer').innerText = `Message: ${data.message}, Time: ${data.time}`;
+          })
+          .catch(error => console.error('Error:', error));
       }
 
       window.onload = () => {
